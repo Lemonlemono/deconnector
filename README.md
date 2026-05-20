@@ -11,6 +11,8 @@ This first version uses Windows Filtering Platform (WFP) from user mode. It adds
 - Saves the selected target process path
 - Locks the target executable so it remains selected after the process exits and starts again
 - Saves process presets for quick target switching
+- Shows a transparent, borderless countdown overlay while disconnected
+- Lets the user edit the overlay screen position
 - Binds a global keyboard hotkey with `RegisterHotKey`
 - Binds XInput and generic HID gamepad buttons
 - Blocks the selected process for a configurable duration through WFP
@@ -62,7 +64,7 @@ and creates a Start Menu shortcut.
 3. Click `Save preset` if you want to reuse that target later.
 4. Use the preset dropdown to quickly switch saved targets.
 5. Keep `Lock target` checked if you want that executable to stay selected after restarts.
-6. Set the number of seconds.
+6. Set the number of seconds and the overlay X/Y screen position.
 7. Click `Bind Hotkey`.
 8. Press the desired keyboard combination, for example `Ctrl + Alt + F8`, or press a connected gamepad button.
 9. Press the binding or click `Disconnect`.

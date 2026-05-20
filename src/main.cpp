@@ -54,6 +54,19 @@ constexpr int kCheckLockTarget = 111;
 constexpr int kComboPresets = 112;
 constexpr int kButtonSavePreset = 113;
 constexpr int kButtonDeletePreset = 114;
+constexpr int kStaticOverlayX = 115;
+constexpr int kEditOverlayX = 116;
+constexpr int kSpinOverlayX = 117;
+constexpr int kStaticOverlayY = 118;
+constexpr int kEditOverlayY = 119;
+constexpr int kSpinOverlayY = 120;
+constexpr int kMinOverlayCoordinate = 0;
+constexpr int kMaxOverlayCoordinate = 10000;
+constexpr int kDefaultOverlayX = 80;
+constexpr int kDefaultOverlayY = 80;
+constexpr int kOverlayWidth = 220;
+constexpr int kOverlayHeight = 96;
+constexpr COLORREF kOverlayTransparentColor = RGB(1, 1, 1);
 
 const GUID kSublayerKey = {
     0x5a93bc98, 0xe189, 0x4718, {0x90, 0xd2, 0x79, 0x9a, 0xc0, 0x7e, 0x9c, 0xd1}
@@ -100,6 +113,14 @@ HWND g_lockTargetCheck = nullptr;
 HWND g_presetCombo = nullptr;
 HWND g_savePresetButton = nullptr;
 HWND g_deletePresetButton = nullptr;
+HWND g_overlayXLabel = nullptr;
+HWND g_overlayXEdit = nullptr;
+HWND g_overlayXSpin = nullptr;
+HWND g_overlayYLabel = nullptr;
+HWND g_overlayYEdit = nullptr;
+HWND g_overlayYSpin = nullptr;
+HWND g_overlayWindow = nullptr;
+HFONT g_overlayFont = nullptr;
 
 std::vector<ProcessInfo> g_processes;
 std::vector<Preset> g_presets;
@@ -110,6 +131,8 @@ InputBinding g_binding;
 bool g_capturingHotkey = false;
 bool g_targetLocked = true;
 int g_durationSeconds = kDefaultDurationSeconds;
+int g_overlayX = kDefaultOverlayX;
+int g_overlayY = kDefaultOverlayY;
 WORD g_previousGamepadButtons[XUSER_MAX_COUNT]{};
 std::map<std::wstring, uint64_t> g_previousRawGamepadButtons;
 std::atomic_bool g_blockActive = false;
@@ -333,6 +356,10 @@ int ClampDurationSeconds(int seconds) {
     return std::max(kMinDurationSeconds, std::min(kMaxDurationSeconds, seconds));
 }
 
+int ClampOverlayCoordinate(int value) {
+    return std::max(kMinOverlayCoordinate, std::min(kMaxOverlayCoordinate, value));
+}
+
 void SetText(HWND hwnd, const std::wstring& text) {
     SetWindowTextW(hwnd, text.c_str());
 }
@@ -418,6 +445,8 @@ void SaveConfig() {
     WritePrivateProfileStringW(L"binding", L"raw_gamepad_device", g_binding.rawGamepadDevice.c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"binding", L"raw_gamepad_buttons", std::to_wstring(g_binding.rawGamepadButtons).c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"behavior", L"duration_seconds", std::to_wstring(g_durationSeconds).c_str(), g_configPath.c_str());
+    WritePrivateProfileStringW(L"overlay", L"x", std::to_wstring(g_overlayX).c_str(), g_configPath.c_str());
+    WritePrivateProfileStringW(L"overlay", L"y", std::to_wstring(g_overlayY).c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"target", L"locked", g_targetLocked ? L"1" : L"0", g_configPath.c_str());
 }
 
@@ -453,6 +482,8 @@ void LoadConfig() {
     g_binding.rawGamepadButtons = _wcstoui64(value, nullptr, 10);
     g_binding.modifiers |= MOD_NOREPEAT;
     g_durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(L"behavior", L"duration_seconds", kDefaultDurationSeconds, g_configPath.c_str()));
+    g_overlayX = ClampOverlayCoordinate(GetPrivateProfileIntW(L"overlay", L"x", kDefaultOverlayX, g_configPath.c_str()));
+    g_overlayY = ClampOverlayCoordinate(GetPrivateProfileIntW(L"overlay", L"y", kDefaultOverlayY, g_configPath.c_str()));
     LoadPresets();
 }
 
@@ -489,6 +520,44 @@ int ReadDurationFromUi(HWND hwnd) {
 
     SaveConfig();
     return g_durationSeconds;
+}
+
+void NormalizeEditInt(HWND edit, int value) {
+    if (!edit) {
+        return;
+    }
+
+    wchar_t current[32]{};
+    GetWindowTextW(edit, current, static_cast<int>(std::size(current)));
+    std::wstring normalized = std::to_wstring(value);
+    if (normalized != current) {
+        SetWindowTextW(edit, normalized.c_str());
+    }
+}
+
+void MoveOverlayWindow() {
+    if (g_overlayWindow) {
+        SetWindowPos(g_overlayWindow, HWND_TOPMOST, g_overlayX, g_overlayY, kOverlayWidth, kOverlayHeight, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+}
+
+void ReadOverlayPositionFromUi(HWND hwnd) {
+    BOOL translated = FALSE;
+    UINT value = GetDlgItemInt(hwnd, kEditOverlayX, &translated, FALSE);
+    if (translated) {
+        g_overlayX = ClampOverlayCoordinate(static_cast<int>(value));
+    }
+
+    translated = FALSE;
+    value = GetDlgItemInt(hwnd, kEditOverlayY, &translated, FALSE);
+    if (translated) {
+        g_overlayY = ClampOverlayCoordinate(static_cast<int>(value));
+    }
+
+    NormalizeEditInt(g_overlayXEdit, g_overlayX);
+    NormalizeEditInt(g_overlayYEdit, g_overlayY);
+    MoveOverlayWindow();
+    SaveConfig();
 }
 
 void UpdateLabels() {
@@ -766,6 +835,113 @@ private:
     std::vector<UINT64> filterIds_;
 };
 
+long long RemainingBlockMilliseconds() {
+    auto now = std::chrono::steady_clock::now();
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(g_blockEndsAt - now).count();
+    return remaining < 0 ? 0 : remaining;
+}
+
+std::wstring OverlayCountdownText() {
+    wchar_t text[32]{};
+    swprintf_s(text, L"%.1f", RemainingBlockMilliseconds() / 1000.0);
+    return text;
+}
+
+LRESULT CALLBACK OverlayWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+
+        HBRUSH transparentBrush = CreateSolidBrush(kOverlayTransparentColor);
+        FillRect(dc, &rc, transparentBrush);
+        DeleteObject(transparentBrush);
+
+        if (!g_overlayFont) {
+            g_overlayFont = CreateFontW(
+                -58,
+                0,
+                0,
+                0,
+                FW_BOLD,
+                FALSE,
+                FALSE,
+                FALSE,
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_SWISS,
+                L"Segoe UI");
+        }
+
+        HFONT previousFont = g_overlayFont ? static_cast<HFONT>(SelectObject(dc, g_overlayFont)) : nullptr;
+        SetBkMode(dc, TRANSPARENT);
+
+        std::wstring text = OverlayCountdownText();
+        RECT shadow = rc;
+        OffsetRect(&shadow, 2, 2);
+        SetTextColor(dc, RGB(0, 0, 0));
+        DrawTextW(dc, text.c_str(), -1, &shadow, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        SetTextColor(dc, RGB(255, 255, 255));
+        DrawTextW(dc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        if (previousFont) {
+            SelectObject(dc, previousFont);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void ShowOverlayWindow() {
+    if (!g_overlayWindow) {
+        g_overlayWindow = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT,
+            L"DeconnectorOverlayWindow",
+            L"",
+            WS_POPUP,
+            g_overlayX,
+            g_overlayY,
+            kOverlayWidth,
+            kOverlayHeight,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            nullptr);
+
+        if (g_overlayWindow) {
+            SetLayeredWindowAttributes(g_overlayWindow, kOverlayTransparentColor, 255, LWA_COLORKEY);
+        }
+    }
+
+    if (g_overlayWindow) {
+        MoveOverlayWindow();
+        ShowWindow(g_overlayWindow, SW_SHOWNOACTIVATE);
+        InvalidateRect(g_overlayWindow, nullptr, TRUE);
+    }
+}
+
+void HideOverlayWindow() {
+    if (g_overlayWindow) {
+        ShowWindow(g_overlayWindow, SW_HIDE);
+    }
+}
+
+void UpdateOverlayWindow() {
+    if (g_overlayWindow && IsWindowVisible(g_overlayWindow)) {
+        InvalidateRect(g_overlayWindow, nullptr, TRUE);
+    }
+}
+
 void StartBlock(HWND hwnd) {
     if (g_targetPath.empty()) {
         MessageBoxW(hwnd, L"Select a process before disconnecting.", L"Deconnector", MB_ICONINFORMATION);
@@ -780,6 +956,7 @@ void StartBlock(HWND hwnd) {
     SetTimer(hwnd, kCountdownTimer, 100, nullptr);
     EnableWindow(g_disconnectButton, FALSE);
     SetText(g_statusLabel, L"Status: activating block...");
+    ShowOverlayWindow();
 
     std::wstring path = g_targetPath;
     std::thread([hwnd, path, durationSeconds]() {
@@ -804,15 +981,12 @@ void UpdateCountdown() {
         return;
     }
 
-    auto now = std::chrono::steady_clock::now();
-    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(g_blockEndsAt - now).count();
-    if (remaining < 0) {
-        remaining = 0;
-    }
+    auto remaining = RemainingBlockMilliseconds();
 
     wchar_t text[128]{};
     swprintf_s(text, L"Status: disconnected, %.1f s remaining", remaining / 1000.0);
     SetText(g_statusLabel, text);
+    UpdateOverlayWindow();
 }
 
 WORD ReadGamepadButtons(DWORD controllerIndex) {
@@ -1039,6 +1213,12 @@ void ResizeControls(HWND hwnd) {
     MoveWindow(g_presetCombo, padding, y, 300, 240, TRUE);
     MoveWindow(g_savePresetButton, padding + 308, y, 112, buttonHeight, TRUE);
     MoveWindow(g_deletePresetButton, padding + 428, y, 112, buttonHeight, TRUE);
+    MoveWindow(g_overlayXLabel, padding + 552, y + 6, 72, 20, TRUE);
+    MoveWindow(g_overlayXEdit, padding + 626, y + 2, 72, 24, TRUE);
+    MoveWindow(g_overlayXSpin, padding + 626, y + 2, 72, 24, TRUE);
+    MoveWindow(g_overlayYLabel, padding + 708, y + 6, 24, 20, TRUE);
+    MoveWindow(g_overlayYEdit, padding + 734, y + 2, 72, 24, TRUE);
+    MoveWindow(g_overlayYSpin, padding + 734, y + 2, 72, 24, TRUE);
 
     y += buttonHeight + 8;
     MoveWindow(g_refreshButton, padding, y, buttonWidth, buttonHeight, TRUE);
@@ -1080,6 +1260,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         g_presetCombo = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd, ControlId(kComboPresets), nullptr, nullptr);
         g_savePresetButton = CreateWindowW(L"BUTTON", L"Save preset", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonSavePreset), nullptr, nullptr);
         g_deletePresetButton = CreateWindowW(L"BUTTON", L"Delete preset", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonDeletePreset), nullptr, nullptr);
+        g_overlayXLabel = CreateWindowW(L"STATIC", L"Overlay X:", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticOverlayX), nullptr, nullptr);
+        g_overlayXEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, ControlId(kEditOverlayX), nullptr, nullptr);
+        g_overlayXSpin = CreateWindowExW(0, UPDOWN_CLASSW, L"", WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS, 0, 0, 0, 0, hwnd, ControlId(kSpinOverlayX), nullptr, nullptr);
+        SendMessageW(g_overlayXSpin, UDM_SETBUDDY, reinterpret_cast<WPARAM>(g_overlayXEdit), 0);
+        SendMessageW(g_overlayXSpin, UDM_SETRANGE32, kMinOverlayCoordinate, kMaxOverlayCoordinate);
+        SendMessageW(g_overlayXSpin, UDM_SETPOS32, 0, g_overlayX);
+        g_overlayYLabel = CreateWindowW(L"STATIC", L"Y:", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticOverlayY), nullptr, nullptr);
+        g_overlayYEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, ControlId(kEditOverlayY), nullptr, nullptr);
+        g_overlayYSpin = CreateWindowExW(0, UPDOWN_CLASSW, L"", WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS, 0, 0, 0, 0, hwnd, ControlId(kSpinOverlayY), nullptr, nullptr);
+        SendMessageW(g_overlayYSpin, UDM_SETBUDDY, reinterpret_cast<WPARAM>(g_overlayYEdit), 0);
+        SendMessageW(g_overlayYSpin, UDM_SETRANGE32, kMinOverlayCoordinate, kMaxOverlayCoordinate);
+        SendMessageW(g_overlayYSpin, UDM_SETPOS32, 0, g_overlayY);
         g_refreshButton = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonRefresh), nullptr, nullptr);
         g_bindButton = CreateWindowW(L"BUTTON", L"Bind Hotkey", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonBindHotkey), nullptr, nullptr);
         g_disconnectButton = CreateWindowW(L"BUTTON", L"Disconnect", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonDisconnect), nullptr, nullptr);
@@ -1155,6 +1347,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     g_durationSeconds = ClampDurationSeconds(static_cast<int>(value));
                     SaveConfig();
                 }
+            }
+            return 0;
+        case kEditOverlayX:
+        case kEditOverlayY:
+            if (HIWORD(wParam) == EN_CHANGE && g_overlayXEdit != nullptr && g_overlayYEdit != nullptr) {
+                ReadOverlayPositionFromUi(hwnd);
             }
             return 0;
         case kCheckLockTarget:
@@ -1239,11 +1437,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     case kBlockDoneMessage:
         KillTimer(hwnd, kCountdownTimer);
         EnableWindow(g_disconnectButton, TRUE);
+        HideOverlayWindow();
         SetText(g_statusLabel, L"Status: restored");
         return 0;
     case kBlockFailedMessage: {
         KillTimer(hwnd, kCountdownTimer);
         EnableWindow(g_disconnectButton, TRUE);
+        HideOverlayWindow();
         auto* detail = reinterpret_cast<std::wstring*>(lParam);
         std::wstring dialogMessage = L"Failed to create WFP filters.";
         if (detail) {
@@ -1259,6 +1459,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, kCountdownTimer);
         KillTimer(hwnd, kGamepadPollTimer);
         KillTimer(hwnd, kProcessRefreshTimer);
+        HideOverlayWindow();
+        if (g_overlayWindow) {
+            DestroyWindow(g_overlayWindow);
+            g_overlayWindow = nullptr;
+        }
+        if (g_overlayFont) {
+            DeleteObject(g_overlayFont);
+            g_overlayFont = nullptr;
+        }
         UnregisterHotKey(hwnd, kHotkeyId);
         PostQuitMessage(0);
         return 0;
@@ -1278,6 +1487,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     InitCommonControlsEx(&controls);
 
     LoadConfig();
+
+    WNDCLASSEXW overlayClass{};
+    overlayClass.cbSize = sizeof(overlayClass);
+    overlayClass.lpfnWndProc = OverlayWindowProc;
+    overlayClass.hInstance = instance;
+    overlayClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    overlayClass.hbrBackground = nullptr;
+    overlayClass.lpszClassName = L"DeconnectorOverlayWindow";
+    RegisterClassExW(&overlayClass);
 
     const wchar_t* className = L"DeconnectorMainWindow";
     WNDCLASSEXW wc{};
