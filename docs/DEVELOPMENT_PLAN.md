@@ -14,6 +14,7 @@ Status: implemented.
 - Process list with PID and executable path
 - Saved target process path
 - Locked target mode with automatic reselection after process restart
+- Saved presets for quick target switching
 - Global keyboard hotkey binding
 - XInput and Raw Input HID gamepad button binding
 - Temporary WFP filters for a configurable number of seconds

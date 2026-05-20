@@ -51,6 +51,9 @@ constexpr int kStaticDuration = 108;
 constexpr int kEditDuration = 109;
 constexpr int kSpinDuration = 110;
 constexpr int kCheckLockTarget = 111;
+constexpr int kComboPresets = 112;
+constexpr int kButtonSavePreset = 113;
+constexpr int kButtonDeletePreset = 114;
 
 const GUID kSublayerKey = {
     0x5a93bc98, 0xe189, 0x4718, {0x90, 0xd2, 0x79, 0x9a, 0xc0, 0x7e, 0x9c, 0xd1}
@@ -59,6 +62,12 @@ const GUID kSublayerKey = {
 struct ProcessInfo {
     DWORD pid = 0;
     std::wstring name;
+    std::wstring path;
+};
+
+struct Preset {
+    std::wstring name;
+    std::wstring processName;
     std::wstring path;
 };
 
@@ -88,8 +97,12 @@ HWND g_durationLabel = nullptr;
 HWND g_durationEdit = nullptr;
 HWND g_durationSpin = nullptr;
 HWND g_lockTargetCheck = nullptr;
+HWND g_presetCombo = nullptr;
+HWND g_savePresetButton = nullptr;
+HWND g_deletePresetButton = nullptr;
 
 std::vector<ProcessInfo> g_processes;
+std::vector<Preset> g_presets;
 std::wstring g_configPath;
 std::wstring g_targetPath;
 std::wstring g_targetName;
@@ -328,6 +341,73 @@ HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
 }
 
+std::wstring PresetSectionName(size_t index) {
+    return L"preset." + std::to_wstring(index);
+}
+
+void LoadPresets() {
+    g_presets.clear();
+
+    int count = GetPrivateProfileIntW(L"presets", L"count", 0, g_configPath.c_str());
+    wchar_t value[4096]{};
+
+    for (int i = 0; i < count; ++i) {
+        std::wstring section = PresetSectionName(static_cast<size_t>(i));
+
+        Preset preset;
+        GetPrivateProfileStringW(section.c_str(), L"name", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+        preset.name = value;
+        GetPrivateProfileStringW(section.c_str(), L"process_name", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+        preset.processName = value;
+        GetPrivateProfileStringW(section.c_str(), L"path", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+        preset.path = value;
+
+        if (!preset.name.empty() && !preset.path.empty()) {
+            g_presets.push_back(std::move(preset));
+        }
+    }
+}
+
+void SavePresets() {
+    int oldCount = GetPrivateProfileIntW(L"presets", L"count", 0, g_configPath.c_str());
+    for (int i = 0; i < oldCount; ++i) {
+        WritePrivateProfileStringW(PresetSectionName(static_cast<size_t>(i)).c_str(), nullptr, nullptr, g_configPath.c_str());
+    }
+
+    WritePrivateProfileStringW(L"presets", L"count", std::to_wstring(g_presets.size()).c_str(), g_configPath.c_str());
+    for (size_t i = 0; i < g_presets.size(); ++i) {
+        std::wstring section = PresetSectionName(i);
+        WritePrivateProfileStringW(section.c_str(), L"name", g_presets[i].name.c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"process_name", g_presets[i].processName.c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"path", g_presets[i].path.c_str(), g_configPath.c_str());
+    }
+}
+
+void RefreshPresetCombo() {
+    if (!g_presetCombo) {
+        return;
+    }
+
+    SendMessageW(g_presetCombo, CB_RESETCONTENT, 0, 0);
+    int selected = -1;
+    for (size_t i = 0; i < g_presets.size(); ++i) {
+        std::wstring text = g_presets[i].name;
+        if (!g_presets[i].processName.empty()) {
+            text += L" - ";
+            text += g_presets[i].processName;
+        }
+        LRESULT row = SendMessageW(g_presetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        if (row >= 0) {
+            SendMessageW(g_presetCombo, CB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(i));
+        }
+        if (!g_targetPath.empty() && _wcsicmp(g_presets[i].path.c_str(), g_targetPath.c_str()) == 0) {
+            selected = static_cast<int>(row);
+        }
+    }
+
+    SendMessageW(g_presetCombo, CB_SETCURSEL, selected, 0);
+}
+
 void SaveConfig() {
     WritePrivateProfileStringW(L"target", L"path", g_targetPath.c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"target", L"name", g_targetName.c_str(), g_configPath.c_str());
@@ -373,6 +453,7 @@ void LoadConfig() {
     g_binding.rawGamepadButtons = _wcstoui64(value, nullptr, 10);
     g_binding.modifiers |= MOD_NOREPEAT;
     g_durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(L"behavior", L"duration_seconds", kDefaultDurationSeconds, g_configPath.c_str()));
+    LoadPresets();
 }
 
 bool IsOnlyModifier(UINT vk) {
@@ -480,6 +561,7 @@ bool TrySelectCurrentProcessTarget(bool quiet) {
     g_targetName = g_processes[index].name;
     SaveConfig();
     UpdateLabels();
+    RefreshPresetCombo();
     return true;
 }
 
@@ -503,6 +585,72 @@ void SetTargetLock(HWND hwnd, bool locked) {
     } else {
         KillTimer(hwnd, kProcessRefreshTimer);
     }
+}
+
+void ApplyPreset(HWND hwnd, size_t index) {
+    if (index >= g_presets.size()) {
+        return;
+    }
+
+    g_targetPath = g_presets[index].path;
+    g_targetName = g_presets[index].processName.empty() ? g_presets[index].name : g_presets[index].processName;
+    SetTargetLock(hwnd, true);
+    SaveConfig();
+    UpdateLabels();
+    RefreshPresetCombo();
+    RefreshProcessList();
+}
+
+void SaveCurrentTargetAsPreset(HWND hwnd) {
+    if (g_targetPath.empty()) {
+        if (!TrySelectCurrentProcessTarget(true)) {
+            MessageBoxW(hwnd, L"Select a process before saving a preset.", L"Deconnector", MB_ICONINFORMATION);
+            return;
+        }
+    }
+
+    Preset preset;
+    preset.processName = g_targetName;
+    preset.path = g_targetPath;
+    preset.name = g_targetName.empty() ? L"Preset " + std::to_wstring(g_presets.size() + 1) : g_targetName;
+
+    auto existing = std::find_if(g_presets.begin(), g_presets.end(), [&](const Preset& item) {
+        return _wcsicmp(item.path.c_str(), preset.path.c_str()) == 0;
+    });
+
+    if (existing == g_presets.end()) {
+        g_presets.push_back(std::move(preset));
+    } else {
+        existing->name = preset.name;
+        existing->processName = preset.processName;
+        existing->path = preset.path;
+    }
+
+    SavePresets();
+    RefreshPresetCombo();
+    SetText(g_statusLabel, L"Status: preset saved");
+}
+
+void DeleteSelectedPreset() {
+    int row = static_cast<int>(SendMessageW(g_presetCombo, CB_GETCURSEL, 0, 0));
+    if (row < 0) {
+        return;
+    }
+
+    LRESULT data = SendMessageW(g_presetCombo, CB_GETITEMDATA, static_cast<WPARAM>(row), 0);
+    if (data < 0) {
+        return;
+    }
+
+    size_t index = static_cast<size_t>(data);
+    if (index >= g_presets.size()) {
+        return;
+    }
+
+    g_presets.erase(g_presets.begin() + static_cast<std::ptrdiff_t>(index));
+    SavePresets();
+    RefreshPresetCombo();
+    SetText(g_statusLabel, L"Status: preset deleted");
 }
 
 class WfpBlocker {
@@ -881,13 +1029,18 @@ void ResizeControls(HWND hwnd) {
     int buttonWidth = 132;
     int buttonHeight = 30;
     int labelHeight = 24;
-    int bottomHeight = 104;
+    int bottomHeight = 142;
     int width = rc.right - rc.left;
     int height = rc.bottom - rc.top;
 
     MoveWindow(g_list, padding, padding, width - padding * 2, height - bottomHeight - padding, TRUE);
 
     int y = height - bottomHeight + 4;
+    MoveWindow(g_presetCombo, padding, y, 300, 240, TRUE);
+    MoveWindow(g_savePresetButton, padding + 308, y, 112, buttonHeight, TRUE);
+    MoveWindow(g_deletePresetButton, padding + 428, y, 112, buttonHeight, TRUE);
+
+    y += buttonHeight + 8;
     MoveWindow(g_refreshButton, padding, y, buttonWidth, buttonHeight, TRUE);
     MoveWindow(g_bindButton, padding + buttonWidth + 8, y, buttonWidth, buttonHeight, TRUE);
     MoveWindow(g_disconnectButton, padding + (buttonWidth + 8) * 2, y, buttonWidth, buttonHeight, TRUE);
@@ -924,6 +1077,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         AddColumn(g_list, 1, 80, L"PID");
         AddColumn(g_list, 2, 620, L"Path");
 
+        g_presetCombo = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd, ControlId(kComboPresets), nullptr, nullptr);
+        g_savePresetButton = CreateWindowW(L"BUTTON", L"Save preset", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonSavePreset), nullptr, nullptr);
+        g_deletePresetButton = CreateWindowW(L"BUTTON", L"Delete preset", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonDeletePreset), nullptr, nullptr);
         g_refreshButton = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonRefresh), nullptr, nullptr);
         g_bindButton = CreateWindowW(L"BUTTON", L"Bind Hotkey", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonBindHotkey), nullptr, nullptr);
         g_disconnectButton = CreateWindowW(L"BUTTON", L"Disconnect", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonDisconnect), nullptr, nullptr);
@@ -949,6 +1105,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SetTimer(hwnd, kProcessRefreshTimer, 2000, nullptr);
         }
         UpdateLabels();
+        RefreshPresetCombo();
         RefreshProcessList();
         ResizeControls(hwnd);
         return 0;
@@ -958,6 +1115,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case kComboPresets:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int row = static_cast<int>(SendMessageW(g_presetCombo, CB_GETCURSEL, 0, 0));
+                if (row >= 0) {
+                    LRESULT data = SendMessageW(g_presetCombo, CB_GETITEMDATA, static_cast<WPARAM>(row), 0);
+                    if (data >= 0) {
+                        ApplyPreset(hwnd, static_cast<size_t>(data));
+                    }
+                }
+            }
+            return 0;
+        case kButtonSavePreset:
+            SaveCurrentTargetAsPreset(hwnd);
+            return 0;
+        case kButtonDeletePreset:
+            DeleteSelectedPreset();
+            return 0;
         case kButtonRefresh:
             RefreshProcessList();
             return 0;
