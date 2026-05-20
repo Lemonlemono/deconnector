@@ -1,3 +1,5 @@
 #include <windows.h>
+#include "resource.h"
 
 1 RT_MANIFEST "app.manifest"
+IDI_DECONNECTOR ICON "app.ico"

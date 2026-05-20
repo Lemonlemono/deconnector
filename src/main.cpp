@@ -9,6 +9,8 @@
 #include <tlhelp32.h>
 #include <xinput.h>
 
+#include "resource.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1503,8 +1505,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hIconSm = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_DECONNECTOR));
+    wc.hIconSm = LoadIconW(instance, MAKEINTRESOURCEW(IDI_DECONNECTOR));
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     wc.lpszClassName = className;
 
