@@ -32,7 +32,8 @@
 
 namespace {
 
-constexpr int kHotkeyId = 2001;
+constexpr int kActionCount = 2;
+constexpr int kHotkeyBaseId = 2001;
 constexpr UINT kBlockDoneMessage = WM_APP + 1;
 constexpr UINT kBlockFailedMessage = WM_APP + 2;
 constexpr UINT_PTR kCountdownTimer = 3001;
@@ -44,14 +45,14 @@ constexpr int kDefaultDurationSeconds = 5;
 
 constexpr int kListProcesses = 101;
 constexpr int kButtonRefresh = 102;
-constexpr int kButtonBindHotkey = 103;
-constexpr int kButtonDisconnect = 104;
+constexpr int kButtonBindAction0 = 103;
+constexpr int kButtonDisconnectAction0 = 104;
 constexpr int kStaticTarget = 105;
-constexpr int kStaticHotkey = 106;
+constexpr int kStaticActionBinding0 = 106;
 constexpr int kStaticStatus = 107;
-constexpr int kStaticDuration = 108;
-constexpr int kEditDuration = 109;
-constexpr int kSpinDuration = 110;
+constexpr int kStaticActionDuration0 = 108;
+constexpr int kEditActionDuration0 = 109;
+constexpr int kSpinActionDuration0 = 110;
 constexpr int kCheckLockTarget = 111;
 constexpr int kComboPresets = 112;
 constexpr int kButtonSavePreset = 113;
@@ -62,6 +63,16 @@ constexpr int kSpinOverlayX = 117;
 constexpr int kStaticOverlayY = 118;
 constexpr int kEditOverlayY = 119;
 constexpr int kSpinOverlayY = 120;
+constexpr int kStaticActionLabel0 = 121;
+constexpr int kCheckActionEnabled0 = 122;
+constexpr int kStaticActionLabel1 = 123;
+constexpr int kCheckActionEnabled1 = 124;
+constexpr int kStaticActionDuration1 = 125;
+constexpr int kEditActionDuration1 = 126;
+constexpr int kSpinActionDuration1 = 127;
+constexpr int kButtonBindAction1 = 128;
+constexpr int kButtonDisconnectAction1 = 129;
+constexpr int kStaticActionBinding1 = 130;
 constexpr int kMinOverlayCoordinate = 0;
 constexpr int kMaxOverlayCoordinate = 10000;
 constexpr int kDefaultOverlayX = 80;
@@ -101,20 +112,28 @@ struct InputBinding {
     uint64_t rawGamepadButtons = 0;
 };
 
+struct DisconnectAction {
+    bool enabled = true;
+    int durationSeconds = kDefaultDurationSeconds;
+    InputBinding binding;
+};
+
 HWND g_list = nullptr;
 HWND g_refreshButton = nullptr;
-HWND g_bindButton = nullptr;
-HWND g_disconnectButton = nullptr;
 HWND g_targetLabel = nullptr;
-HWND g_hotkeyLabel = nullptr;
 HWND g_statusLabel = nullptr;
-HWND g_durationLabel = nullptr;
-HWND g_durationEdit = nullptr;
-HWND g_durationSpin = nullptr;
 HWND g_lockTargetCheck = nullptr;
 HWND g_presetCombo = nullptr;
 HWND g_savePresetButton = nullptr;
 HWND g_deletePresetButton = nullptr;
+HWND g_actionLabel[kActionCount]{};
+HWND g_actionEnabledCheck[kActionCount]{};
+HWND g_actionDurationLabel[kActionCount]{};
+HWND g_actionDurationEdit[kActionCount]{};
+HWND g_actionDurationSpin[kActionCount]{};
+HWND g_actionBindButton[kActionCount]{};
+HWND g_actionDisconnectButton[kActionCount]{};
+HWND g_actionBindingLabel[kActionCount]{};
 HWND g_overlayXLabel = nullptr;
 HWND g_overlayXEdit = nullptr;
 HWND g_overlayXSpin = nullptr;
@@ -129,10 +148,10 @@ std::vector<Preset> g_presets;
 std::wstring g_configPath;
 std::wstring g_targetPath;
 std::wstring g_targetName;
-InputBinding g_binding;
-bool g_capturingHotkey = false;
+DisconnectAction g_actions[kActionCount];
+int g_capturingActionIndex = -1;
+int g_activeActionIndex = -1;
 bool g_targetLocked = true;
-int g_durationSeconds = kDefaultDurationSeconds;
 int g_overlayX = kDefaultOverlayX;
 int g_overlayY = kDefaultOverlayY;
 WORD g_previousGamepadButtons[XUSER_MAX_COUNT]{};
@@ -370,6 +389,98 @@ HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
 }
 
+int ActionEnabledId(int index) {
+    return index == 0 ? kCheckActionEnabled0 : kCheckActionEnabled1;
+}
+
+int ActionLabelId(int index) {
+    return index == 0 ? kStaticActionLabel0 : kStaticActionLabel1;
+}
+
+int ActionDurationLabelId(int index) {
+    return index == 0 ? kStaticActionDuration0 : kStaticActionDuration1;
+}
+
+int ActionDurationEditId(int index) {
+    return index == 0 ? kEditActionDuration0 : kEditActionDuration1;
+}
+
+int ActionDurationSpinId(int index) {
+    return index == 0 ? kSpinActionDuration0 : kSpinActionDuration1;
+}
+
+int ActionBindButtonId(int index) {
+    return index == 0 ? kButtonBindAction0 : kButtonBindAction1;
+}
+
+int ActionDisconnectButtonId(int index) {
+    return index == 0 ? kButtonDisconnectAction0 : kButtonDisconnectAction1;
+}
+
+int ActionBindingLabelId(int index) {
+    return index == 0 ? kStaticActionBinding0 : kStaticActionBinding1;
+}
+
+int ActionIndexFromBindButtonId(int id) {
+    if (id == kButtonBindAction0) {
+        return 0;
+    }
+    if (id == kButtonBindAction1) {
+        return 1;
+    }
+    return -1;
+}
+
+int ActionIndexFromDisconnectButtonId(int id) {
+    if (id == kButtonDisconnectAction0) {
+        return 0;
+    }
+    if (id == kButtonDisconnectAction1) {
+        return 1;
+    }
+    return -1;
+}
+
+int ActionIndexFromDurationEditId(int id) {
+    if (id == kEditActionDuration0) {
+        return 0;
+    }
+    if (id == kEditActionDuration1) {
+        return 1;
+    }
+    return -1;
+}
+
+int ActionIndexFromEnabledId(int id) {
+    if (id == kCheckActionEnabled0) {
+        return 0;
+    }
+    if (id == kCheckActionEnabled1) {
+        return 1;
+    }
+    return -1;
+}
+
+std::wstring ActionSectionName(int index) {
+    return L"action." + std::to_wstring(index);
+}
+
+void InitializeDefaultActions() {
+    g_actions[0] = DisconnectAction{};
+    g_actions[0].enabled = true;
+    g_actions[0].durationSeconds = 5;
+    g_actions[0].binding.kind = BindingKind::Keyboard;
+    g_actions[0].binding.modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+    g_actions[0].binding.vk = VK_F8;
+
+    g_actions[1] = DisconnectAction{};
+    g_actions[1].enabled = true;
+    g_actions[1].durationSeconds = 10;
+    g_actions[1].binding.kind = BindingKind::Keyboard;
+    g_actions[1].binding.modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+    g_actions[1].binding.vk = VK_F9;
+}
+
 std::wstring PresetSectionName(size_t index) {
     return L"preset." + std::to_wstring(index);
 }
@@ -440,13 +551,19 @@ void RefreshPresetCombo() {
 void SaveConfig() {
     WritePrivateProfileStringW(L"target", L"path", g_targetPath.c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"target", L"name", g_targetName.c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"type", std::to_wstring(static_cast<int>(g_binding.kind)).c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"modifiers", std::to_wstring(g_binding.modifiers).c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"vk", std::to_wstring(g_binding.vk).c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"gamepad_buttons", std::to_wstring(g_binding.gamepadButtons).c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"raw_gamepad_device", g_binding.rawGamepadDevice.c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"binding", L"raw_gamepad_buttons", std::to_wstring(g_binding.rawGamepadButtons).c_str(), g_configPath.c_str());
-    WritePrivateProfileStringW(L"behavior", L"duration_seconds", std::to_wstring(g_durationSeconds).c_str(), g_configPath.c_str());
+    for (int i = 0; i < kActionCount; ++i) {
+        const std::wstring section = ActionSectionName(i);
+        const auto& action = g_actions[i];
+        const auto& binding = action.binding;
+        WritePrivateProfileStringW(section.c_str(), L"enabled", action.enabled ? L"1" : L"0", g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"duration_seconds", std::to_wstring(action.durationSeconds).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"binding_type", std::to_wstring(static_cast<int>(binding.kind)).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"modifiers", std::to_wstring(binding.modifiers).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"vk", std::to_wstring(binding.vk).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"gamepad_buttons", std::to_wstring(binding.gamepadButtons).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"raw_gamepad_device", binding.rawGamepadDevice.c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"raw_gamepad_buttons", std::to_wstring(binding.rawGamepadButtons).c_str(), g_configPath.c_str());
+    }
     WritePrivateProfileStringW(L"overlay", L"x", std::to_wstring(g_overlayX).c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"overlay", L"y", std::to_wstring(g_overlayY).c_str(), g_configPath.c_str());
     WritePrivateProfileStringW(L"target", L"locked", g_targetLocked ? L"1" : L"0", g_configPath.c_str());
@@ -454,6 +571,7 @@ void SaveConfig() {
 
 void LoadConfig() {
     g_configPath = GetConfigPath();
+    InitializeDefaultActions();
 
     wchar_t value[4096]{};
     GetPrivateProfileStringW(L"target", L"path", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
@@ -463,27 +581,55 @@ void LoadConfig() {
     g_targetName = value;
     g_targetLocked = GetPrivateProfileIntW(L"target", L"locked", 1, g_configPath.c_str()) != 0;
 
-    int bindingType = GetPrivateProfileIntW(L"binding", L"type", static_cast<int>(BindingKind::Keyboard), g_configPath.c_str());
-    if (bindingType == static_cast<int>(BindingKind::Gamepad)) {
-        g_binding.kind = BindingKind::Gamepad;
-    } else if (bindingType == static_cast<int>(BindingKind::RawGamepad)) {
-        g_binding.kind = BindingKind::RawGamepad;
-    } else {
-        g_binding.kind = BindingKind::Keyboard;
+    for (int i = 0; i < kActionCount; ++i) {
+        const std::wstring section = ActionSectionName(i);
+        GetPrivateProfileStringW(section.c_str(), L"duration_seconds", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+        bool hasActionSection = value[0] != L'\0';
+
+        auto& action = g_actions[i];
+        auto& binding = action.binding;
+        if (hasActionSection) {
+            action.enabled = GetPrivateProfileIntW(section.c_str(), L"enabled", action.enabled ? 1 : 0, g_configPath.c_str()) != 0;
+            action.durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(section.c_str(), L"duration_seconds", action.durationSeconds, g_configPath.c_str()));
+
+            int bindingType = GetPrivateProfileIntW(section.c_str(), L"binding_type", static_cast<int>(binding.kind), g_configPath.c_str());
+            if (bindingType == static_cast<int>(BindingKind::Gamepad)) {
+                binding.kind = BindingKind::Gamepad;
+            } else if (bindingType == static_cast<int>(BindingKind::RawGamepad)) {
+                binding.kind = BindingKind::RawGamepad;
+            } else {
+                binding.kind = BindingKind::Keyboard;
+            }
+            binding.modifiers = GetPrivateProfileIntW(section.c_str(), L"modifiers", binding.modifiers, g_configPath.c_str()) | MOD_NOREPEAT;
+            binding.vk = GetPrivateProfileIntW(section.c_str(), L"vk", binding.vk, g_configPath.c_str());
+            binding.gamepadButtons = static_cast<WORD>(GetPrivateProfileIntW(section.c_str(), L"gamepad_buttons", binding.gamepadButtons, g_configPath.c_str()));
+            GetPrivateProfileStringW(section.c_str(), L"raw_gamepad_device", binding.rawGamepadDevice.c_str(), value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+            binding.rawGamepadDevice = value;
+            GetPrivateProfileStringW(section.c_str(), L"raw_gamepad_buttons", std::to_wstring(binding.rawGamepadButtons).c_str(), value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+            binding.rawGamepadButtons = _wcstoui64(value, nullptr, 10);
+        } else if (i == 0) {
+            int bindingType = GetPrivateProfileIntW(L"binding", L"type", static_cast<int>(BindingKind::Keyboard), g_configPath.c_str());
+            if (bindingType == static_cast<int>(BindingKind::Gamepad)) {
+                binding.kind = BindingKind::Gamepad;
+            } else if (bindingType == static_cast<int>(BindingKind::RawGamepad)) {
+                binding.kind = BindingKind::RawGamepad;
+            } else {
+                binding.kind = BindingKind::Keyboard;
+            }
+            binding.modifiers = GetPrivateProfileIntW(L"binding", L"modifiers",
+                GetPrivateProfileIntW(L"hotkey", L"modifiers", MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, g_configPath.c_str()),
+                g_configPath.c_str()) | MOD_NOREPEAT;
+            binding.vk = GetPrivateProfileIntW(L"binding", L"vk",
+                GetPrivateProfileIntW(L"hotkey", L"vk", VK_F8, g_configPath.c_str()),
+                g_configPath.c_str());
+            binding.gamepadButtons = static_cast<WORD>(GetPrivateProfileIntW(L"binding", L"gamepad_buttons", XINPUT_GAMEPAD_A, g_configPath.c_str()));
+            GetPrivateProfileStringW(L"binding", L"raw_gamepad_device", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+            binding.rawGamepadDevice = value;
+            GetPrivateProfileStringW(L"binding", L"raw_gamepad_buttons", L"0", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
+            binding.rawGamepadButtons = _wcstoui64(value, nullptr, 10);
+            action.durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(L"behavior", L"duration_seconds", kDefaultDurationSeconds, g_configPath.c_str()));
+        }
     }
-    g_binding.modifiers = GetPrivateProfileIntW(L"binding", L"modifiers",
-        GetPrivateProfileIntW(L"hotkey", L"modifiers", MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, g_configPath.c_str()),
-        g_configPath.c_str());
-    g_binding.vk = GetPrivateProfileIntW(L"binding", L"vk",
-        GetPrivateProfileIntW(L"hotkey", L"vk", VK_F8, g_configPath.c_str()),
-        g_configPath.c_str());
-    g_binding.gamepadButtons = static_cast<WORD>(GetPrivateProfileIntW(L"binding", L"gamepad_buttons", XINPUT_GAMEPAD_A, g_configPath.c_str()));
-    GetPrivateProfileStringW(L"binding", L"raw_gamepad_device", L"", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
-    g_binding.rawGamepadDevice = value;
-    GetPrivateProfileStringW(L"binding", L"raw_gamepad_buttons", L"0", value, static_cast<DWORD>(std::size(value)), g_configPath.c_str());
-    g_binding.rawGamepadButtons = _wcstoui64(value, nullptr, 10);
-    g_binding.modifiers |= MOD_NOREPEAT;
-    g_durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(L"behavior", L"duration_seconds", kDefaultDurationSeconds, g_configPath.c_str()));
     g_overlayX = ClampOverlayCoordinate(GetPrivateProfileIntW(L"overlay", L"x", kDefaultOverlayX, g_configPath.c_str()));
     g_overlayY = ClampOverlayCoordinate(GetPrivateProfileIntW(L"overlay", L"y", kDefaultOverlayY, g_configPath.c_str()));
     LoadPresets();
@@ -497,31 +643,31 @@ bool IsOnlyModifier(UINT vk) {
         vk == VK_LWIN || vk == VK_RWIN;
 }
 
-bool RegisterConfiguredHotkey(HWND hwnd) {
-    UnregisterHotKey(hwnd, kHotkeyId);
-    if (g_binding.kind == BindingKind::Gamepad || g_binding.kind == BindingKind::RawGamepad) {
-        return true;
+void UnregisterActionHotkeys(HWND hwnd) {
+    for (int i = 0; i < kActionCount; ++i) {
+        UnregisterHotKey(hwnd, kHotkeyBaseId + i);
     }
-    return RegisterHotKey(hwnd, kHotkeyId, g_binding.modifiers, g_binding.vk) == TRUE;
 }
 
-int ReadDurationFromUi(HWND hwnd) {
-    BOOL translated = FALSE;
-    UINT value = GetDlgItemInt(hwnd, kEditDuration, &translated, FALSE);
-    int seconds = translated ? static_cast<int>(value) : kDefaultDurationSeconds;
-    g_durationSeconds = ClampDurationSeconds(seconds);
-
-    if (g_durationEdit) {
-        wchar_t current[32]{};
-        GetWindowTextW(g_durationEdit, current, static_cast<int>(std::size(current)));
-        std::wstring normalized = std::to_wstring(g_durationSeconds);
-        if (normalized != current) {
-            SetWindowTextW(g_durationEdit, normalized.c_str());
-        }
+bool RegisterActionHotkey(HWND hwnd, int index) {
+    UnregisterHotKey(hwnd, kHotkeyBaseId + index);
+    if (index < 0 || index >= kActionCount || !g_actions[index].enabled) {
+        return true;
     }
 
-    SaveConfig();
-    return g_durationSeconds;
+    const auto& binding = g_actions[index].binding;
+    if (binding.kind == BindingKind::Gamepad || binding.kind == BindingKind::RawGamepad) {
+        return true;
+    }
+    return RegisterHotKey(hwnd, kHotkeyBaseId + index, binding.modifiers, binding.vk) == TRUE;
+}
+
+bool RegisterActionHotkeys(HWND hwnd) {
+    bool ok = true;
+    for (int i = 0; i < kActionCount; ++i) {
+        ok = RegisterActionHotkey(hwnd, i) && ok;
+    }
+    return ok;
 }
 
 void NormalizeEditInt(HWND edit, int value) {
@@ -535,6 +681,22 @@ void NormalizeEditInt(HWND edit, int value) {
     if (normalized != current) {
         SetWindowTextW(edit, normalized.c_str());
     }
+}
+
+int ReadActionDurationFromUi(HWND hwnd, int index) {
+    if (index < 0 || index >= kActionCount) {
+        return kDefaultDurationSeconds;
+    }
+
+    BOOL translated = FALSE;
+    UINT value = GetDlgItemInt(hwnd, ActionDurationEditId(index), &translated, FALSE);
+    int seconds = translated ? static_cast<int>(value) : g_actions[index].durationSeconds;
+    g_actions[index].durationSeconds = ClampDurationSeconds(seconds);
+
+    NormalizeEditInt(g_actionDurationEdit[index], g_actions[index].durationSeconds);
+
+    SaveConfig();
+    return g_actions[index].durationSeconds;
 }
 
 void MoveOverlayWindow() {
@@ -576,10 +738,20 @@ void UpdateLabels() {
     }
     SetText(g_targetLabel, target);
 
-    std::wstring hotkey = g_capturingHotkey
-        ? L"Binding: press a keyboard combo or a gamepad button..."
-        : L"Binding: " + BindingText(g_binding);
-    SetText(g_hotkeyLabel, hotkey);
+    for (int i = 0; i < kActionCount; ++i) {
+        if (g_actionBindingLabel[i]) {
+            std::wstring bindingText;
+            if (g_capturingActionIndex == i) {
+                bindingText = L"Binding: press a keyboard combo or a gamepad button...";
+            } else {
+                bindingText = L"Binding: " + BindingText(g_actions[i].binding);
+            }
+            SetText(g_actionBindingLabel[i], bindingText);
+        }
+        if (g_actionEnabledCheck[i]) {
+            SendMessageW(g_actionEnabledCheck[i], BM_SETCHECK, g_actions[i].enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+    }
 }
 
 void RefreshProcessList() {
@@ -944,7 +1116,22 @@ void UpdateOverlayWindow() {
     }
 }
 
-void StartBlock(HWND hwnd) {
+void SetActionButtonsEnabled(BOOL enabled) {
+    for (int i = 0; i < kActionCount; ++i) {
+        if (g_actionDisconnectButton[i]) {
+            EnableWindow(g_actionDisconnectButton[i], enabled);
+        }
+    }
+}
+
+void StartBlock(HWND hwnd, int actionIndex) {
+    if (actionIndex < 0 || actionIndex >= kActionCount) {
+        return;
+    }
+    if (!g_actions[actionIndex].enabled) {
+        SetText(g_statusLabel, L"Status: action is disabled");
+        return;
+    }
     if (g_targetPath.empty()) {
         MessageBoxW(hwnd, L"Select a process before disconnecting.", L"Deconnector", MB_ICONINFORMATION);
         return;
@@ -953,11 +1140,12 @@ void StartBlock(HWND hwnd) {
         return;
     }
 
-    int durationSeconds = ReadDurationFromUi(hwnd);
+    int durationSeconds = ReadActionDurationFromUi(hwnd, actionIndex);
+    g_activeActionIndex = actionIndex;
     g_blockEndsAt = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
     SetTimer(hwnd, kCountdownTimer, 100, nullptr);
-    EnableWindow(g_disconnectButton, FALSE);
-    SetText(g_statusLabel, L"Status: activating block...");
+    SetActionButtonsEnabled(FALSE);
+    SetText(g_statusLabel, L"Status: activating action " + std::to_wstring(actionIndex + 1) + L"...");
     ShowOverlayWindow();
 
     std::wstring path = g_targetPath;
@@ -986,7 +1174,7 @@ void UpdateCountdown() {
     auto remaining = RemainingBlockMilliseconds();
 
     wchar_t text[128]{};
-    swprintf_s(text, L"Status: disconnected, %.1f s remaining", remaining / 1000.0);
+    swprintf_s(text, L"Status: action %d disconnected, %.1f s remaining", g_activeActionIndex + 1, remaining / 1000.0);
     SetText(g_statusLabel, text);
     UpdateOverlayWindow();
 }
@@ -1005,11 +1193,14 @@ void PrimeGamepadStates() {
     }
 }
 
-void CaptureGamepadBinding(HWND hwnd, WORD buttons) {
-    g_binding.kind = BindingKind::Gamepad;
-    g_binding.gamepadButtons = buttons;
-    g_capturingHotkey = false;
-    RegisterConfiguredHotkey(hwnd);
+void CaptureGamepadBinding(HWND hwnd, int actionIndex, WORD buttons) {
+    if (actionIndex < 0 || actionIndex >= kActionCount) {
+        return;
+    }
+    g_actions[actionIndex].binding.kind = BindingKind::Gamepad;
+    g_actions[actionIndex].binding.gamepadButtons = buttons;
+    g_capturingActionIndex = -1;
+    RegisterActionHotkeys(hwnd);
     SaveConfig();
     UpdateLabels();
 }
@@ -1020,18 +1211,25 @@ void PollGamepads(HWND hwnd) {
         WORD previous = g_previousGamepadButtons[i];
         WORD newlyPressed = current & ~previous;
 
-        if (g_capturingHotkey && current != 0 && newlyPressed != 0) {
-            CaptureGamepadBinding(hwnd, current);
+        if (g_capturingActionIndex >= 0 && current != 0 && newlyPressed != 0) {
+            CaptureGamepadBinding(hwnd, g_capturingActionIndex, current);
             g_previousGamepadButtons[i] = current;
             return;
         }
 
-        if (!g_capturingHotkey &&
-            g_binding.kind == BindingKind::Gamepad &&
-            g_binding.gamepadButtons != 0 &&
-            (current & g_binding.gamepadButtons) == g_binding.gamepadButtons &&
-            (previous & g_binding.gamepadButtons) != g_binding.gamepadButtons) {
-            StartBlock(hwnd);
+        if (g_capturingActionIndex < 0) {
+            for (int actionIndex = 0; actionIndex < kActionCount; ++actionIndex) {
+                const auto& action = g_actions[actionIndex];
+                const auto& binding = action.binding;
+                if (action.enabled &&
+                    binding.kind == BindingKind::Gamepad &&
+                    binding.gamepadButtons != 0 &&
+                    (current & binding.gamepadButtons) == binding.gamepadButtons &&
+                    (previous & binding.gamepadButtons) != binding.gamepadButtons) {
+                    StartBlock(hwnd, actionIndex);
+                    break;
+                }
+            }
         }
 
         g_previousGamepadButtons[i] = current;
@@ -1139,12 +1337,15 @@ bool ExtractRawGamepadButtons(const RAWINPUT* raw, uint64_t& buttons) {
     return true;
 }
 
-void CaptureRawGamepadBinding(HWND hwnd, const std::wstring& deviceName, uint64_t buttons) {
-    g_binding.kind = BindingKind::RawGamepad;
-    g_binding.rawGamepadDevice = deviceName;
-    g_binding.rawGamepadButtons = buttons;
-    g_capturingHotkey = false;
-    RegisterConfiguredHotkey(hwnd);
+void CaptureRawGamepadBinding(HWND hwnd, int actionIndex, const std::wstring& deviceName, uint64_t buttons) {
+    if (actionIndex < 0 || actionIndex >= kActionCount) {
+        return;
+    }
+    g_actions[actionIndex].binding.kind = BindingKind::RawGamepad;
+    g_actions[actionIndex].binding.rawGamepadDevice = deviceName;
+    g_actions[actionIndex].binding.rawGamepadButtons = buttons;
+    g_capturingActionIndex = -1;
+    RegisterActionHotkeys(hwnd);
     SaveConfig();
     UpdateLabels();
 }
@@ -1170,19 +1371,26 @@ void HandleRawInput(HWND hwnd, LPARAM lParam) {
     uint64_t previous = g_previousRawGamepadButtons[deviceName];
     uint64_t newlyPressed = buttons & ~previous;
 
-    if (g_capturingHotkey && buttons != 0 && newlyPressed != 0) {
-        CaptureRawGamepadBinding(hwnd, deviceName, buttons);
+    if (g_capturingActionIndex >= 0 && buttons != 0 && newlyPressed != 0) {
+        CaptureRawGamepadBinding(hwnd, g_capturingActionIndex, deviceName, buttons);
         g_previousRawGamepadButtons[deviceName] = buttons;
         return;
     }
 
-    if (!g_capturingHotkey &&
-        g_binding.kind == BindingKind::RawGamepad &&
-        g_binding.rawGamepadButtons != 0 &&
-        deviceName == g_binding.rawGamepadDevice &&
-        (buttons & g_binding.rawGamepadButtons) == g_binding.rawGamepadButtons &&
-        (previous & g_binding.rawGamepadButtons) != g_binding.rawGamepadButtons) {
-        StartBlock(hwnd);
+    if (g_capturingActionIndex < 0) {
+        for (int actionIndex = 0; actionIndex < kActionCount; ++actionIndex) {
+            const auto& action = g_actions[actionIndex];
+            const auto& binding = action.binding;
+            if (action.enabled &&
+                binding.kind == BindingKind::RawGamepad &&
+                binding.rawGamepadButtons != 0 &&
+                deviceName == binding.rawGamepadDevice &&
+                (buttons & binding.rawGamepadButtons) == binding.rawGamepadButtons &&
+                (previous & binding.rawGamepadButtons) != binding.rawGamepadButtons) {
+                StartBlock(hwnd, actionIndex);
+                break;
+            }
+        }
     }
 
     g_previousRawGamepadButtons[deviceName] = buttons;
@@ -1205,7 +1413,7 @@ void ResizeControls(HWND hwnd) {
     int buttonWidth = 132;
     int buttonHeight = 30;
     int labelHeight = 24;
-    int bottomHeight = 142;
+    int bottomHeight = 218;
     int width = rc.right - rc.left;
     int height = rc.bottom - rc.top;
 
@@ -1223,19 +1431,25 @@ void ResizeControls(HWND hwnd) {
     MoveWindow(g_overlayYSpin, padding + 734, y + 2, 72, 24, TRUE);
 
     y += buttonHeight + 8;
+    for (int i = 0; i < kActionCount; ++i) {
+        MoveWindow(g_actionLabel[i], padding, y + 6, 70, 20, TRUE);
+        MoveWindow(g_actionEnabledCheck[i], padding + 74, y + 5, 74, 22, TRUE);
+        MoveWindow(g_actionDurationLabel[i], padding + 154, y + 6, 66, 20, TRUE);
+        MoveWindow(g_actionDurationEdit[i], padding + 224, y + 2, 62, 24, TRUE);
+        MoveWindow(g_actionDurationSpin[i], padding + 224, y + 2, 62, 24, TRUE);
+        MoveWindow(g_actionBindButton[i], padding + 298, y, 96, buttonHeight, TRUE);
+        MoveWindow(g_actionDisconnectButton[i], padding + 402, y, 104, buttonHeight, TRUE);
+        MoveWindow(g_actionBindingLabel[i], padding + 516, y + 6, width - padding - (padding + 516), 20, TRUE);
+        y += buttonHeight + 4;
+    }
+
+    y += 4;
     MoveWindow(g_refreshButton, padding, y, buttonWidth, buttonHeight, TRUE);
-    MoveWindow(g_bindButton, padding + buttonWidth + 8, y, buttonWidth, buttonHeight, TRUE);
-    MoveWindow(g_disconnectButton, padding + (buttonWidth + 8) * 2, y, buttonWidth, buttonHeight, TRUE);
-    MoveWindow(g_durationLabel, padding + (buttonWidth + 8) * 3 + 12, y + 6, 88, 20, TRUE);
-    MoveWindow(g_durationEdit, padding + (buttonWidth + 8) * 3 + 102, y + 2, 76, 24, TRUE);
-    MoveWindow(g_durationSpin, padding + (buttonWidth + 8) * 3 + 102, y + 2, 76, 24, TRUE);
-    MoveWindow(g_lockTargetCheck, padding + (buttonWidth + 8) * 3 + 194, y + 4, 124, 24, TRUE);
+    MoveWindow(g_lockTargetCheck, padding + buttonWidth + 8, y + 4, 124, 24, TRUE);
+    MoveWindow(g_statusLabel, padding + buttonWidth + 148, y + 6, width - padding - (padding + buttonWidth + 148), labelHeight, TRUE);
 
     y += buttonHeight + 8;
     MoveWindow(g_targetLabel, padding, y, width - padding * 2, labelHeight, TRUE);
-    y += labelHeight;
-    MoveWindow(g_hotkeyLabel, padding, y, width / 2 - padding, labelHeight, TRUE);
-    MoveWindow(g_statusLabel, width / 2, y, width / 2 - padding, labelHeight, TRUE);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1275,21 +1489,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         SendMessageW(g_overlayYSpin, UDM_SETRANGE32, kMinOverlayCoordinate, kMaxOverlayCoordinate);
         SendMessageW(g_overlayYSpin, UDM_SETPOS32, 0, g_overlayY);
         g_refreshButton = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonRefresh), nullptr, nullptr);
-        g_bindButton = CreateWindowW(L"BUTTON", L"Bind Hotkey", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonBindHotkey), nullptr, nullptr);
-        g_disconnectButton = CreateWindowW(L"BUTTON", L"Disconnect", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(kButtonDisconnect), nullptr, nullptr);
-        g_durationLabel = CreateWindowW(L"STATIC", L"Seconds:", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticDuration), nullptr, nullptr);
-        g_durationEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, ControlId(kEditDuration), nullptr, nullptr);
-        g_durationSpin = CreateWindowExW(0, UPDOWN_CLASSW, L"", WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS, 0, 0, 0, 0, hwnd, ControlId(kSpinDuration), nullptr, nullptr);
-        SendMessageW(g_durationSpin, UDM_SETBUDDY, reinterpret_cast<WPARAM>(g_durationEdit), 0);
-        SendMessageW(g_durationSpin, UDM_SETRANGE32, kMinDurationSeconds, kMaxDurationSeconds);
-        SendMessageW(g_durationSpin, UDM_SETPOS32, 0, g_durationSeconds);
+        for (int i = 0; i < kActionCount; ++i) {
+            std::wstring label = L"Action " + std::to_wstring(i + 1) + L":";
+            g_actionLabel[i] = CreateWindowW(L"STATIC", label.c_str(), WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(ActionLabelId(i)), nullptr, nullptr);
+            g_actionEnabledCheck[i] = CreateWindowW(L"BUTTON", L"Enabled", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd, ControlId(ActionEnabledId(i)), nullptr, nullptr);
+            SendMessageW(g_actionEnabledCheck[i], BM_SETCHECK, g_actions[i].enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            g_actionDurationLabel[i] = CreateWindowW(L"STATIC", L"Seconds:", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(ActionDurationLabelId(i)), nullptr, nullptr);
+            g_actionDurationEdit[i] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL, 0, 0, 0, 0, hwnd, ControlId(ActionDurationEditId(i)), nullptr, nullptr);
+            g_actionDurationSpin[i] = CreateWindowExW(0, UPDOWN_CLASSW, L"", WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS, 0, 0, 0, 0, hwnd, ControlId(ActionDurationSpinId(i)), nullptr, nullptr);
+            SendMessageW(g_actionDurationSpin[i], UDM_SETBUDDY, reinterpret_cast<WPARAM>(g_actionDurationEdit[i]), 0);
+            SendMessageW(g_actionDurationSpin[i], UDM_SETRANGE32, kMinDurationSeconds, kMaxDurationSeconds);
+            SendMessageW(g_actionDurationSpin[i], UDM_SETPOS32, 0, g_actions[i].durationSeconds);
+            g_actionBindButton[i] = CreateWindowW(L"BUTTON", L"Bind", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(ActionBindButtonId(i)), nullptr, nullptr);
+            g_actionDisconnectButton[i] = CreateWindowW(L"BUTTON", L"Disconnect", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(ActionDisconnectButtonId(i)), nullptr, nullptr);
+            g_actionBindingLabel[i] = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(ActionBindingLabelId(i)), nullptr, nullptr);
+        }
         g_lockTargetCheck = CreateWindowW(L"BUTTON", L"Lock target", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd, ControlId(kCheckLockTarget), nullptr, nullptr);
         SendMessageW(g_lockTargetCheck, BM_SETCHECK, g_targetLocked ? BST_CHECKED : BST_UNCHECKED, 0);
         g_targetLabel = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticTarget), nullptr, nullptr);
-        g_hotkeyLabel = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticHotkey), nullptr, nullptr);
         g_statusLabel = CreateWindowW(L"STATIC", L"Status: idle", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(kStaticStatus), nullptr, nullptr);
 
-        RegisterConfiguredHotkey(hwnd);
+        RegisterActionHotkeys(hwnd);
         if (!RegisterRawGamepadInput(hwnd)) {
             SetText(g_statusLabel, L"Status: raw gamepad input unavailable");
         }
@@ -1329,28 +1549,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case kButtonRefresh:
             RefreshProcessList();
             return 0;
-        case kButtonBindHotkey:
-            g_capturingHotkey = true;
-            PrimeGamepadStates();
-            SetFocus(hwnd);
-            UpdateLabels();
-            return 0;
-        case kButtonDisconnect:
-            if (!g_targetLocked || g_targetPath.empty()) {
-                TrySelectCurrentProcessTarget(false);
-            }
-            StartBlock(hwnd);
-            return 0;
-        case kEditDuration:
-            if (HIWORD(wParam) == EN_CHANGE && g_durationEdit != nullptr) {
-                BOOL translated = FALSE;
-                UINT value = GetDlgItemInt(hwnd, kEditDuration, &translated, FALSE);
-                if (translated) {
-                    g_durationSeconds = ClampDurationSeconds(static_cast<int>(value));
-                    SaveConfig();
-                }
-            }
-            return 0;
         case kEditOverlayX:
         case kEditOverlayY:
             if (HIWORD(wParam) == EN_CHANGE && g_overlayXEdit != nullptr && g_overlayYEdit != nullptr) {
@@ -1362,6 +1560,42 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         default:
             break;
+        }
+
+        if (int actionIndex = ActionIndexFromBindButtonId(LOWORD(wParam)); actionIndex >= 0) {
+            g_capturingActionIndex = actionIndex;
+            PrimeGamepadStates();
+            SetFocus(hwnd);
+            UpdateLabels();
+            return 0;
+        }
+
+        if (int actionIndex = ActionIndexFromDisconnectButtonId(LOWORD(wParam)); actionIndex >= 0) {
+            if (!g_targetLocked || g_targetPath.empty()) {
+                TrySelectCurrentProcessTarget(false);
+            }
+            StartBlock(hwnd, actionIndex);
+            return 0;
+        }
+
+        if (int actionIndex = ActionIndexFromDurationEditId(LOWORD(wParam)); actionIndex >= 0) {
+            if (HIWORD(wParam) == EN_CHANGE && g_actionDurationEdit[actionIndex] != nullptr) {
+                BOOL translated = FALSE;
+                UINT value = GetDlgItemInt(hwnd, ActionDurationEditId(actionIndex), &translated, FALSE);
+                if (translated) {
+                    g_actions[actionIndex].durationSeconds = ClampDurationSeconds(static_cast<int>(value));
+                    SaveConfig();
+                }
+            }
+            return 0;
+        }
+
+        if (int actionIndex = ActionIndexFromEnabledId(LOWORD(wParam)); actionIndex >= 0) {
+            g_actions[actionIndex].enabled = SendMessageW(g_actionEnabledCheck[actionIndex], BM_GETCHECK, 0, 0) == BST_CHECKED;
+            SaveConfig();
+            RegisterActionHotkeys(hwnd);
+            UpdateLabels();
+            return 0;
         }
         break;
     case WM_NOTIFY:
@@ -1377,7 +1611,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         break;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        if (g_capturingHotkey && !IsOnlyModifier(static_cast<UINT>(wParam))) {
+        if (g_capturingActionIndex >= 0 && !IsOnlyModifier(static_cast<UINT>(wParam))) {
             UINT modifiers = MOD_NOREPEAT;
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 modifiers |= MOD_CONTROL;
@@ -1397,12 +1631,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 return 0;
             }
 
-            g_binding.kind = BindingKind::Keyboard;
-            g_binding.modifiers = modifiers;
-            g_binding.vk = static_cast<UINT>(wParam);
-            g_capturingHotkey = false;
+            int actionIndex = g_capturingActionIndex;
+            g_actions[actionIndex].binding.kind = BindingKind::Keyboard;
+            g_actions[actionIndex].binding.modifiers = modifiers;
+            g_actions[actionIndex].binding.vk = static_cast<UINT>(wParam);
+            g_capturingActionIndex = -1;
 
-            if (!RegisterConfiguredHotkey(hwnd)) {
+            if (!RegisterActionHotkeys(hwnd)) {
                 MessageBoxW(hwnd, L"That hotkey is already in use by another application.", L"Deconnector", MB_ICONWARNING);
             } else {
                 SaveConfig();
@@ -1412,8 +1647,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         }
         break;
     case WM_HOTKEY:
-        if (wParam == kHotkeyId) {
-            StartBlock(hwnd);
+        if (wParam >= kHotkeyBaseId && wParam < kHotkeyBaseId + kActionCount) {
+            StartBlock(hwnd, static_cast<int>(wParam - kHotkeyBaseId));
             return 0;
         }
         break;
@@ -1438,14 +1673,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         return 0;
     case kBlockDoneMessage:
         KillTimer(hwnd, kCountdownTimer);
-        EnableWindow(g_disconnectButton, TRUE);
+        SetActionButtonsEnabled(TRUE);
         HideOverlayWindow();
+        g_activeActionIndex = -1;
         SetText(g_statusLabel, L"Status: restored");
         return 0;
     case kBlockFailedMessage: {
         KillTimer(hwnd, kCountdownTimer);
-        EnableWindow(g_disconnectButton, TRUE);
+        SetActionButtonsEnabled(TRUE);
         HideOverlayWindow();
+        g_activeActionIndex = -1;
         auto* detail = reinterpret_cast<std::wstring*>(lParam);
         std::wstring dialogMessage = L"Failed to create WFP filters.";
         if (detail) {
@@ -1470,7 +1707,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             DeleteObject(g_overlayFont);
             g_overlayFont = nullptr;
         }
-        UnregisterHotKey(hwnd, kHotkeyId);
+        UnregisterActionHotkeys(hwnd);
         PostQuitMessage(0);
         return 0;
     default:

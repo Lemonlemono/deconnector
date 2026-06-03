@@ -16,8 +16,9 @@ Status: implemented.
 - Locked target mode with automatic reselection after process restart
 - Saved presets for quick target switching
 - Transparent countdown overlay with configurable screen position
-- Global keyboard hotkey binding
-- XInput and Raw Input HID gamepad button binding
+- Two independent disconnect actions with separate duration and binding
+- Global keyboard hotkey binding per action
+- XInput and Raw Input HID gamepad button binding per action
 - Temporary WFP filters for a configurable number of seconds
 - Dynamic WFP session for cleanup on process exit
 - Lightweight local install script
