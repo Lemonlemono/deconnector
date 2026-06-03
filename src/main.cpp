@@ -73,6 +73,10 @@ constexpr int kSpinActionDuration1 = 127;
 constexpr int kButtonBindAction1 = 128;
 constexpr int kButtonDisconnectAction1 = 129;
 constexpr int kStaticActionBinding1 = 130;
+constexpr int kStaticActionMode0 = 131;
+constexpr int kComboActionMode0 = 132;
+constexpr int kStaticActionMode1 = 133;
+constexpr int kComboActionMode1 = 134;
 constexpr int kMinOverlayCoordinate = 0;
 constexpr int kMaxOverlayCoordinate = 10000;
 constexpr int kDefaultOverlayX = 80;
@@ -103,6 +107,11 @@ enum class BindingKind {
     RawGamepad = 2
 };
 
+enum class BlockMode {
+    FullBlock = 0,
+    OutboundOnly = 1
+};
+
 struct InputBinding {
     BindingKind kind = BindingKind::Keyboard;
     UINT modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
@@ -115,6 +124,7 @@ struct InputBinding {
 struct DisconnectAction {
     bool enabled = true;
     int durationSeconds = kDefaultDurationSeconds;
+    BlockMode mode = BlockMode::FullBlock;
     InputBinding binding;
 };
 
@@ -133,6 +143,8 @@ HWND g_actionDurationEdit[kActionCount]{};
 HWND g_actionDurationSpin[kActionCount]{};
 HWND g_actionBindButton[kActionCount]{};
 HWND g_actionDisconnectButton[kActionCount]{};
+HWND g_actionModeLabel[kActionCount]{};
+HWND g_actionModeCombo[kActionCount]{};
 HWND g_actionBindingLabel[kActionCount]{};
 HWND g_overlayXLabel = nullptr;
 HWND g_overlayXEdit = nullptr;
@@ -373,6 +385,20 @@ std::wstring BindingText(const InputBinding& binding) {
     return KeyboardBindingText(binding);
 }
 
+std::wstring BlockModeText(BlockMode mode) {
+    switch (mode) {
+    case BlockMode::OutboundOnly:
+        return L"Outbound only";
+    case BlockMode::FullBlock:
+    default:
+        return L"Full block";
+    }
+}
+
+BlockMode BlockModeFromInt(int value) {
+    return value == static_cast<int>(BlockMode::OutboundOnly) ? BlockMode::OutboundOnly : BlockMode::FullBlock;
+}
+
 int ClampDurationSeconds(int seconds) {
     return std::max(kMinDurationSeconds, std::min(kMaxDurationSeconds, seconds));
 }
@@ -417,6 +443,14 @@ int ActionDisconnectButtonId(int index) {
     return index == 0 ? kButtonDisconnectAction0 : kButtonDisconnectAction1;
 }
 
+int ActionModeLabelId(int index) {
+    return index == 0 ? kStaticActionMode0 : kStaticActionMode1;
+}
+
+int ActionModeComboId(int index) {
+    return index == 0 ? kComboActionMode0 : kComboActionMode1;
+}
+
 int ActionBindingLabelId(int index) {
     return index == 0 ? kStaticActionBinding0 : kStaticActionBinding1;
 }
@@ -456,6 +490,16 @@ int ActionIndexFromEnabledId(int id) {
         return 0;
     }
     if (id == kCheckActionEnabled1) {
+        return 1;
+    }
+    return -1;
+}
+
+int ActionIndexFromModeComboId(int id) {
+    if (id == kComboActionMode0) {
+        return 0;
+    }
+    if (id == kComboActionMode1) {
         return 1;
     }
     return -1;
@@ -557,6 +601,7 @@ void SaveConfig() {
         const auto& binding = action.binding;
         WritePrivateProfileStringW(section.c_str(), L"enabled", action.enabled ? L"1" : L"0", g_configPath.c_str());
         WritePrivateProfileStringW(section.c_str(), L"duration_seconds", std::to_wstring(action.durationSeconds).c_str(), g_configPath.c_str());
+        WritePrivateProfileStringW(section.c_str(), L"block_mode", std::to_wstring(static_cast<int>(action.mode)).c_str(), g_configPath.c_str());
         WritePrivateProfileStringW(section.c_str(), L"binding_type", std::to_wstring(static_cast<int>(binding.kind)).c_str(), g_configPath.c_str());
         WritePrivateProfileStringW(section.c_str(), L"modifiers", std::to_wstring(binding.modifiers).c_str(), g_configPath.c_str());
         WritePrivateProfileStringW(section.c_str(), L"vk", std::to_wstring(binding.vk).c_str(), g_configPath.c_str());
@@ -591,6 +636,7 @@ void LoadConfig() {
         if (hasActionSection) {
             action.enabled = GetPrivateProfileIntW(section.c_str(), L"enabled", action.enabled ? 1 : 0, g_configPath.c_str()) != 0;
             action.durationSeconds = ClampDurationSeconds(GetPrivateProfileIntW(section.c_str(), L"duration_seconds", action.durationSeconds, g_configPath.c_str()));
+            action.mode = BlockModeFromInt(GetPrivateProfileIntW(section.c_str(), L"block_mode", static_cast<int>(action.mode), g_configPath.c_str()));
 
             int bindingType = GetPrivateProfileIntW(section.c_str(), L"binding_type", static_cast<int>(binding.kind), g_configPath.c_str());
             if (bindingType == static_cast<int>(BindingKind::Gamepad)) {
@@ -751,6 +797,9 @@ void UpdateLabels() {
         if (g_actionEnabledCheck[i]) {
             SendMessageW(g_actionEnabledCheck[i], BM_SETCHECK, g_actions[i].enabled ? BST_CHECKED : BST_UNCHECKED, 0);
         }
+        if (g_actionModeCombo[i]) {
+            SendMessageW(g_actionModeCombo[i], CB_SETCURSEL, static_cast<WPARAM>(g_actions[i].mode), 0);
+        }
     }
 }
 
@@ -906,7 +955,7 @@ public:
         Stop();
     }
 
-    DWORD Start(const std::wstring& appPath) {
+    DWORD Start(const std::wstring& appPath, BlockMode mode) {
         Stop();
 
         FWPM_SESSION0 session{};
@@ -936,12 +985,14 @@ public:
             return error;
         }
 
-        const GUID layers[] = {
+        std::vector<GUID> layers = {
             FWPM_LAYER_ALE_AUTH_CONNECT_V4,
-            FWPM_LAYER_ALE_AUTH_CONNECT_V6,
-            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
-            FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6
+            FWPM_LAYER_ALE_AUTH_CONNECT_V6
         };
+        if (mode == BlockMode::FullBlock) {
+            layers.push_back(FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4);
+            layers.push_back(FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6);
+        }
 
         DWORD lastError = ERROR_SUCCESS;
         for (const GUID& layer : layers) {
@@ -1145,13 +1196,14 @@ void StartBlock(HWND hwnd, int actionIndex) {
     g_blockEndsAt = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
     SetTimer(hwnd, kCountdownTimer, 100, nullptr);
     SetActionButtonsEnabled(FALSE);
-    SetText(g_statusLabel, L"Status: activating action " + std::to_wstring(actionIndex + 1) + L"...");
+    SetText(g_statusLabel, L"Status: activating action " + std::to_wstring(actionIndex + 1) + L" (" + BlockModeText(g_actions[actionIndex].mode) + L")...");
     ShowOverlayWindow();
 
     std::wstring path = g_targetPath;
-    std::thread([hwnd, path, durationSeconds]() {
+    BlockMode mode = g_actions[actionIndex].mode;
+    std::thread([hwnd, path, durationSeconds, mode]() {
         WfpBlocker blocker;
-        DWORD error = blocker.Start(path);
+        DWORD error = blocker.Start(path, mode);
         if (error != ERROR_SUCCESS) {
             auto* errorMessage = new std::wstring(FormatWin32Error(error));
             g_blockActive = false;
@@ -1174,7 +1226,10 @@ void UpdateCountdown() {
     auto remaining = RemainingBlockMilliseconds();
 
     wchar_t text[128]{};
-    swprintf_s(text, L"Status: action %d disconnected, %.1f s remaining", g_activeActionIndex + 1, remaining / 1000.0);
+    swprintf_s(text, L"Status: action %d %s, %.1f s remaining",
+        g_activeActionIndex + 1,
+        g_activeActionIndex >= 0 ? BlockModeText(g_actions[g_activeActionIndex].mode).c_str() : L"disconnected",
+        remaining / 1000.0);
     SetText(g_statusLabel, text);
     UpdateOverlayWindow();
 }
@@ -1439,7 +1494,9 @@ void ResizeControls(HWND hwnd) {
         MoveWindow(g_actionDurationSpin[i], padding + 224, y + 2, 62, 24, TRUE);
         MoveWindow(g_actionBindButton[i], padding + 298, y, 96, buttonHeight, TRUE);
         MoveWindow(g_actionDisconnectButton[i], padding + 402, y, 104, buttonHeight, TRUE);
-        MoveWindow(g_actionBindingLabel[i], padding + 516, y + 6, width - padding - (padding + 516), 20, TRUE);
+        MoveWindow(g_actionModeLabel[i], padding + 516, y + 6, 44, 20, TRUE);
+        MoveWindow(g_actionModeCombo[i], padding + 564, y + 2, 126, 120, TRUE);
+        MoveWindow(g_actionBindingLabel[i], padding + 700, y + 6, width - padding - (padding + 700), 20, TRUE);
         y += buttonHeight + 4;
     }
 
@@ -1502,6 +1559,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SendMessageW(g_actionDurationSpin[i], UDM_SETPOS32, 0, g_actions[i].durationSeconds);
             g_actionBindButton[i] = CreateWindowW(L"BUTTON", L"Bind", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(ActionBindButtonId(i)), nullptr, nullptr);
             g_actionDisconnectButton[i] = CreateWindowW(L"BUTTON", L"Disconnect", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, hwnd, ControlId(ActionDisconnectButtonId(i)), nullptr, nullptr);
+            g_actionModeLabel[i] = CreateWindowW(L"STATIC", L"Mode:", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(ActionModeLabelId(i)), nullptr, nullptr);
+            g_actionModeCombo[i] = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, hwnd, ControlId(ActionModeComboId(i)), nullptr, nullptr);
+            SendMessageW(g_actionModeCombo[i], CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Full block"));
+            SendMessageW(g_actionModeCombo[i], CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Outbound only"));
+            SendMessageW(g_actionModeCombo[i], CB_SETCURSEL, static_cast<WPARAM>(g_actions[i].mode), 0);
             g_actionBindingLabel[i] = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP, 0, 0, 0, 0, hwnd, ControlId(ActionBindingLabelId(i)), nullptr, nullptr);
         }
         g_lockTargetCheck = CreateWindowW(L"BUTTON", L"Lock target", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0, hwnd, ControlId(kCheckLockTarget), nullptr, nullptr);
@@ -1595,6 +1657,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             SaveConfig();
             RegisterActionHotkeys(hwnd);
             UpdateLabels();
+            return 0;
+        }
+
+        if (int actionIndex = ActionIndexFromModeComboId(LOWORD(wParam)); actionIndex >= 0) {
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int row = static_cast<int>(SendMessageW(g_actionModeCombo[actionIndex], CB_GETCURSEL, 0, 0));
+                g_actions[actionIndex].mode = BlockModeFromInt(row);
+                SaveConfig();
+                UpdateLabels();
+            }
             return 0;
         }
         break;

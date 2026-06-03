@@ -13,7 +13,7 @@ This first version uses Windows Filtering Platform (WFP) from user mode. It adds
 - Saves process presets for quick target switching
 - Shows a transparent, borderless countdown overlay while disconnected
 - Lets the user edit the overlay screen position
-- Provides two independent disconnect actions, each with its own enabled state, duration, and binding
+- Provides two independent disconnect actions, each with its own enabled state, duration, block mode, and binding
 - Binds global keyboard hotkeys with `RegisterHotKey`
 - Binds XInput and generic HID gamepad buttons
 - Blocks the selected process for a configurable duration through WFP
@@ -69,6 +69,7 @@ and creates a Start Menu shortcut.
 7. Configure Action 1 and Action 2 independently:
    - enable or disable the action
    - set the number of seconds
+   - choose `Full block` or `Outbound only`
    - click `Bind` and press a keyboard combination or gamepad button
 8. Press a bound shortcut or click an action's `Disconnect` button.
 
@@ -77,6 +78,13 @@ Default actions:
 ```text
 Action 1: Ctrl + Alt + F8, 5 seconds
 Action 2: Ctrl + Alt + F9, 10 seconds
+```
+
+Block modes:
+
+```text
+Full block: blocks outbound authorization and inbound receive/accept authorization.
+Outbound only: blocks only outbound authorization, which can behave more like a short upstream loss for some games.
 ```
 
 ## Gamepad Binding
